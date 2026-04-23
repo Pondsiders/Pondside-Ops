@@ -1,0 +1,150 @@
+# Harbormaster LiteLLM config.
+#
+# Three categories of routing:
+#   1. Anthropic Claude — transparent OAuth pass-through for Claude Max
+#   2. Local inference chat models — Ember primary, Modal serverless fallback
+#   3. Local inference embedding models — Ember primary, Modal serverless fallback
+#
+# References:
+#   - https://docs.litellm.ai/docs/tutorials/claude_code_max_subscription
+#   - https://docs.litellm.ai/docs/proxy/reliability  (fallbacks + retries)
+#   - https://docs.litellm.ai/docs/proxy/forward_client_headers
+
+model_list:
+  # ===========================================================================
+  # Anthropic Claude — transparent pass-through for Claude Max OAuth
+  # ===========================================================================
+  # No api_key configured: the OAuth token arrives in the client's
+  # Authorization header and gets forwarded upstream by
+  # general_settings.forward_client_headers_to_llm_api: true.
+  #
+  # Claude Code's request carries TWO auth headers:
+  #   x-litellm-api-key: Bearer sk-XXX   (consumed by LiteLLM for attribution)
+  #   Authorization: Bearer <oauth>       (forwarded to Anthropic unchanged)
+  - model_name: claude-opus-4-7
+    litellm_params:
+      model: anthropic/claude-opus-4-7
+  - model_name: claude-sonnet-4-6
+    litellm_params:
+      model: anthropic/claude-sonnet-4-6
+  - model_name: claude-haiku-4-5-20251001
+    litellm_params:
+      model: anthropic/claude-haiku-4-5-20251001
+
+  # ===========================================================================
+  # Chat — Qwen 3.5 4B
+  # ===========================================================================
+  # Primary: Ember (local RTX 3080 Ti, llama.cpp via llama-swap)
+  - model_name: unsloth/qwen3.5-4b
+    litellm_params:
+      model: openai/unsloth/qwen3.5-4b
+      api_base: https://ember.tail8bd569.ts.net/v1
+      api_key: "EMPTY"
+      timeout: 30
+
+  # Fallback: Modal serverless (scale-to-zero, ~10-15s cold start)
+  - model_name: unsloth/qwen3.5-4b-modal
+    litellm_params:
+      model: openai/unsloth/qwen3.5-4b
+      api_base: https://jefferyharrell--pondside-qwen-serve.modal.run/v1
+      api_key: "EMPTY"
+      # Modal cold-start grace: llama-server opens port before loading weights,
+      # returning 503 "Loading model" for 5-15s. Retry absorbs that window.
+      num_retries: 3
+      timeout: 60
+
+  # ===========================================================================
+  # Chat — Gemma 3 12B Instruct
+  # ===========================================================================
+  # Primary: Ember
+  - model_name: gemma-3-12b-it
+    litellm_params:
+      model: openai/gemma-3-12b-it
+      api_base: https://ember.tail8bd569.ts.net/v1
+      api_key: "EMPTY"
+      timeout: 30
+
+  # Fallback: Modal
+  - model_name: gemma-3-12b-it-modal
+    litellm_params:
+      model: openai/gemma-3-12b-it
+      api_base: https://jefferyharrell--pondside-gemma-serve.modal.run/v1
+      api_key: "EMPTY"
+      num_retries: 3
+      timeout: 60
+
+  # ===========================================================================
+  # Embedding — Qwen 3 Embedding 4B (Alpha's substrate)
+  # ===========================================================================
+  # Primary: Ember
+  - model_name: text-embedding-qwen3-embedding-4b
+    litellm_params:
+      model: openai/text-embedding-qwen3-embedding-4b
+      api_base: https://ember.tail8bd569.ts.net/v1
+      api_key: "EMPTY"
+      timeout: 30
+
+  # Fallback: Modal
+  - model_name: text-embedding-qwen3-embedding-4b-modal
+    litellm_params:
+      model: openai/text-embedding-qwen3-embedding-4b
+      api_base: https://jefferyharrell--pondside-qwen-embedding-serve.modal.run/v1
+      api_key: "EMPTY"
+      num_retries: 3
+      timeout: 60
+
+  # ===========================================================================
+  # Embedding — nomic-embed-text v1.5 (Rosemary's substrate)
+  # ===========================================================================
+  # Primary: Ember
+  - model_name: text-embedding-nomic-embed-text-v1.5
+    litellm_params:
+      model: openai/text-embedding-nomic-embed-text-v1.5
+      api_base: https://ember.tail8bd569.ts.net/v1
+      api_key: "EMPTY"
+      timeout: 30
+
+  # Fallback: Modal
+  - model_name: text-embedding-nomic-embed-text-v1.5-modal
+    litellm_params:
+      model: openai/text-embedding-nomic-embed-text-v1.5
+      api_base: https://jefferyharrell--pondside-nomic-embedding-serve.modal.run/v1
+      api_key: "EMPTY"
+      num_retries: 3
+      timeout: 60
+
+# ===========================================================================
+# Proxy-level settings
+# ===========================================================================
+litellm_settings:
+  drop_params: true          # strip unsupported params rather than erroring
+  request_timeout: 600
+  master_key: os.environ/LITELLM_MASTER_KEY
+
+  # Anthropic rate-limit header → Neon row per response.
+  # Enables historical utilization dashboards (Grafana Cloud).
+  callbacks: callbacks.anthropic_usage
+
+  # Primary → fallback mapping. When the primary returns 5xx/timeout,
+  # LiteLLM routes the same request to the fallback model.
+  fallbacks:
+    - unsloth/qwen3.5-4b: ["unsloth/qwen3.5-4b-modal"]
+    - gemma-3-12b-it: ["gemma-3-12b-it-modal"]
+    - text-embedding-qwen3-embedding-4b: ["text-embedding-qwen3-embedding-4b-modal"]
+    - text-embedding-nomic-embed-text-v1.5: ["text-embedding-nomic-embed-text-v1.5-modal"]
+
+  # When the primary times out specifically (Ember unreachable), fall back
+  # without exhausting retries on the dead endpoint.
+  context_window_fallbacks:
+    []  # placeholder — not used currently
+  num_retries: 2             # retries against the primary before falling over
+
+general_settings:
+  # THE critical setting for Claude Max: forward incoming Authorization headers
+  # to upstream Anthropic intact. Without this, LiteLLM tries to inject its own
+  # auth and the OAuth flow breaks.
+  forward_client_headers_to_llm_api: true
+  # Postgres backend — enables virtual keys, spend logs, admin UI.
+  # DATABASE_URL is set in compose.yml via the .env POSTGRES_PASSWORD.
+  database_url: os.environ/DATABASE_URL
+  store_model_in_db: true    # enables UI-based model management too
