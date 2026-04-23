@@ -1,0 +1,12 @@
+[project]
+name = "modal-serverless-inference"
+version = "0.1.0"
+description = "Pondside fallback inference layer on Modal — Qwen 3.5 4B + Gemma 3 12B, same GGUFs as Ember."
+requires-python = ">=3.12"
+dependencies = [
+    "modal>=0.67",
+    "huggingface-hub[hf-transfer]>=0.26",
+]
+
+[tool.uv]
+package = false

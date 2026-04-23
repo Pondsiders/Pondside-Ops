@@ -1,13 +1,15 @@
 # Pondside-Ops
 
-Version-controlled infrastructure for Pondside's VMs — cloud-init, libvirt
-domain definitions, systemd units, and service configs for every virtual
-machine we run on Primer (or anywhere else in the tailnet that isn't Primer
-itself).
+Version-controlled infrastructure for the things we run — VMs on Primer,
+containers (here or on a dedicated Docker-runner VM), serverless on Modal,
+and whatever comes next. Cloud-init, libvirt domain definitions, systemd
+units, service configs, Modal Functions — the operational stuff that isn't
+application code.
 
 ## What lives here
 
-One directory per VM. Each directory is self-contained:
+One directory per deployable unit — a VM, a container stack, a Modal app.
+Each directory is self-contained:
 
 ```
 ember/               GPU inference compute node (3080 Ti, llama-swap + llama.cpp)
@@ -18,8 +20,11 @@ ember/               GPU inference compute node (3080 Ti, llama-swap + llama.cpp
   BUILD_LOG.md         deployment diary, decisions and deviations
 ```
 
-Future VMs (alpha, rosemary, others) get their own sibling directories when we
-build them.
+Future deployable units (VMs, container stacks, Modal apps) get their own
+sibling directories when we build them. Sibling examples we can see coming:
+`modal-serverless-inference/` (Qwen + Gemma fallbacks), `modal-training/`
+(fine-tuning runs), `harbormaster/` (LiteLLM container), maybe a
+`docker-runner/` VM that hosts everything container-shaped.
 
 ## What does NOT live here
 
@@ -37,13 +42,20 @@ generalized successor. Alpha-Ops is NOT being migrated — its CONVENTIONS.md
 carried forward, its cloud-init templates are reference material. Pondside-Ops
 starts fresh.
 
-## Workflow
+## Workflow (VMs)
 
 1. Design a VM in this repo (cloud-init, domain.xml, service configs).
 2. Hand specs to Abe for the actual VM creation on Primer.
 3. Capture whatever Abe produced back into this repo (`virsh dumpxml` → commit).
 4. Dogfood-test: destroy the VM, redeploy from what's in this repo, verify.
 5. That VM is now reproducible from git.
+
+## Workflow (Modal, containers, other)
+
+Simpler. Each non-VM deployable has its own README inside its directory
+describing how to stand it up (`modal deploy foo.py`, `docker compose up -d`,
+etc.). Same BUILD_LOG.md pattern applies: append-only diary of deploys,
+decisions, and deviations.
 
 ## Principles
 
@@ -53,5 +65,5 @@ starts fresh.
   inlining configs into cloud-init.
 - **Version pins are explicit.** llama-swap version, llama.cpp commit, nvidia
   driver major — all pinned, upgraded intentionally.
-- **One VM per directory.** Shared machinery (scripts, conventions) lives at
-  the root, not duplicated per VM.
+- **One deployable unit per directory.** Shared machinery (scripts,
+  conventions) lives at the root, not duplicated per unit.

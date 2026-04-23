@@ -10,3 +10,8 @@ seed.*
 *.pem
 *.key
 authkey*
+
+# Python / uv
+.venv/
+__pycache__/
+*.pyc
