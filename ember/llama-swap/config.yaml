@@ -1,0 +1,121 @@
+# llama-swap config for Alpha + Rosemary on Ember
+#
+# Design:
+#   Embed group (always-on):  Qwen3-Embedding-4B + nomic-embed-text-v1.5
+#   Chat group (swap):        Qwen 3.5 4B (Alpha)  |  Gemma 3 12B (Rosemary)
+#
+# VRAM budget on 12 GB 3080 Ti (estimates, verify when live):
+#   Embed group always resident:        ~4.3 GB
+#     qwen3-embedding-4b Q4_K_M ctx=4K:  ~3.8 GB
+#     nomic-embed-text-v1.5 F16 ctx=2K:  ~0.5 GB
+#   Chat group (only one at a time):
+#     qwen3.5-4b Q4_K_XL ctx=16K:        ~5 GB     → +embed = ~9.3 GB (comfortable)
+#     gemma-3-12b-it Q4_K_XL ctx=8K:     ~8.5 GB   → +embed = ~12.8 GB (TIGHT — see below)
+#
+#   Gemma 3 12B is the constraint. Mitigations already in its cmd block:
+#     - ctx=8K (could bump to 16K if VRAM holds, revisit after live test)
+#     - --cache-type-k/v q8_0 halves KV cache memory with minimal quality loss
+#   If Gemma OOMs on load, reduce --n-gpu-layers from 99 to ~40 (CPU offload
+#   some layers, slower but functional), or drop ctx to 4K, or drop to Q4_K_M.
+
+healthCheckTimeout: 60
+startPort: 9000
+
+models:
+  # ===== Chat models (swap group) =====
+
+  "unsloth/qwen3.5-4b":
+    proxy: "http://127.0.0.1:${PORT}"
+    cmd: |
+      /opt/llama.cpp/build/bin/llama-server
+      -m /opt/models/qwen3.5-4b/Qwen3.5-4B-UD-Q4_K_XL.gguf
+      --host 127.0.0.1
+      --port ${PORT}
+      --alias "unsloth/qwen3.5-4b"
+      --jinja
+      --ctx-size 16384
+      --n-gpu-layers 99
+      --reasoning off
+      --temp 0.7
+      --top-p 0.8
+      --top-k 20
+      --min-p 0.0
+      --presence-penalty 1.5
+    ttl: 0
+    checkEndpoint: /health
+
+  "gemma-3-12b-it":
+    proxy: "http://127.0.0.1:${PORT}"
+    cmd: |
+      /opt/llama.cpp/build/bin/llama-server
+      -m /opt/models/gemma-3-12b-it/gemma-3-12b-it-UD-Q4_K_XL.gguf
+      --host 127.0.0.1
+      --port ${PORT}
+      --alias "gemma-3-12b-it"
+      --jinja
+      --ctx-size 4096
+      --n-gpu-layers 99
+      --cache-type-k q8_0
+      --cache-type-v q8_0
+      --temp 1.0
+      --top-p 0.95
+      --top-k 64
+      --min-p 0.01
+      --repeat-penalty 1.0
+    ttl: 0
+    checkEndpoint: /health
+
+  # ===== Embedding models (always-on group) =====
+
+  "text-embedding-qwen3-embedding-4b":
+    proxy: "http://127.0.0.1:${PORT}"
+    cmd: |
+      /opt/llama.cpp/build/bin/llama-server
+      -m /opt/models/qwen3-embedding-4b/Qwen3-Embedding-4B-Q4_K_M.gguf
+      --host 127.0.0.1
+      --port ${PORT}
+      --alias "text-embedding-qwen3-embedding-4b"
+      --ctx-size 2048
+      --n-gpu-layers 99
+      --embedding
+      --pooling last
+    ttl: 0
+    checkEndpoint: /health
+
+  "text-embedding-nomic-embed-text-v1.5":
+    proxy: "http://127.0.0.1:${PORT}"
+    cmd: |
+      /opt/llama.cpp/build/bin/llama-server
+      -m /opt/models/nomic-embed-text-v1.5/nomic-embed-text-v1.5.f16.gguf
+      --host 127.0.0.1
+      --port ${PORT}
+      --alias "text-embedding-nomic-embed-text-v1.5"
+      --ctx-size 2048
+      --n-gpu-layers 99
+      --embedding
+      --pooling mean
+    ttl: 0
+    checkEndpoint: /health
+
+# Matrix replaces legacy groups. Solver-based eviction.
+# Valid co-resident sets:
+#   alpha_stack:    qe + ne + q35      (Alpha active, both embeds + my chat)
+#   rosemary_stack: ne + g12           (Rosemary active, her chat + her embed only)
+# When Gemma is requested, solver sees [qe, ne, q35] running, picks rosemary_stack,
+# evicts qe and q35 to free ~9 GB, loads Gemma. Swap back to Qwen 3.5 reverses it.
+# qe and ne are subsets of multiple sets so they load cleanly in either context.
+matrix:
+  vars:
+    qe: text-embedding-qwen3-embedding-4b
+    ne: text-embedding-nomic-embed-text-v1.5
+    q35: unsloth/qwen3.5-4b
+    g12: gemma-3-12b-it
+
+  evict_costs:
+    g12: 5   # ~5s cold load (8.4 GB model + KV cache)
+    q35: 5   # ~5s cold load (~3 GB model + 16K KV cache)
+    qe:  4   # ~3-4s cold load (2.5 GB model)
+
+  sets:
+    alpha_stack: "qe & ne & q35"
+    rosemary_stack: "ne & g12"

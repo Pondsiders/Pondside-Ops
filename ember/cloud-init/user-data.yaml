@@ -1,0 +1,134 @@
+#cloud-config
+# Ember — Pondside GPU inference node (RTX 3080 Ti via VFIO passthrough).
+#
+# Scope: install prerequisites, clone llama.cpp source, install llama-swap
+# binary, set up virtiofs + systemd plumbing, write the MOTD, reboot.
+#
+# Explicitly NOT automated (human does on first login, per /etc/motd):
+#   - `tailscale up` (manual auth URL approval)
+#   - llama.cpp CUDA build
+#   - llama-swap config fetch from Pondside-Ops
+#   - enabling/starting llama-swap
+#   - `tailscale serve --bg` for HTTPS front
+#
+# Decisions and deviations logged in ../BUILD_LOG.md.
+
+hostname: ember
+manage_etc_hosts: true
+
+ssh_authorized_keys:
+  - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHUP7Uua2KA6coLvPGJy8g/plqMOTcBZLgpEYYuQwmJc alpha@alphafornow.com
+  - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIO5nx5wBZK8Cc4JJ1j0Nwf6no+kJzf0KVfN1xbG1VuWZ jefferyharrell@gmail.com
+
+# Add Tailscale apt repo before package_upgrade runs.
+bootcmd:
+  - |
+    if [ ! -f /etc/apt/sources.list.d/tailscale.list ]; then
+      curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.noarmor.gpg \
+        -o /usr/share/keyrings/tailscale-archive-keyring.gpg
+      curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.tailscale-keyring.list \
+        -o /etc/apt/sources.list.d/tailscale.list
+    fi
+
+package_update: true
+package_upgrade: true
+
+packages:
+  # NVIDIA driver — pinned to 590 major. Minor bumps from apt are fine.
+  - nvidia-headless-590-open
+  - nvidia-utils-590
+  # Build toolchain for llama.cpp with CUDA
+  - build-essential
+  - cmake
+  - git
+  - libcurl4-openssl-dev
+  - libssl-dev
+  - ca-certificates
+  # Networking / management
+  - tailscale
+  - curl
+  - jq
+
+write_files:
+  # Global env vars for HuggingFace CLI — Xet protocol crawls on consumer
+  # ISPs (memory #11225, April 23 2026 re-confirmed). Disable Xet and enable
+  # the Rust parallel downloader.
+  - path: /etc/environment
+    append: true
+    content: |
+      HF_HUB_DISABLE_XET=1
+      HF_HUB_ENABLE_HF_TRANSFER=1
+
+  # systemd unit for llama-swap. Requires /etc/llama-swap/config.yaml to exist
+  # before the human enables it (see /etc/motd for the fetch command).
+  - path: /etc/systemd/system/llama-swap.service
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=llama-swap OpenAI-compatible model-routing proxy
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=simple
+      ExecStart=/usr/local/bin/llama-swap --config /etc/llama-swap/config.yaml --listen 0.0.0.0:8001
+      Restart=on-failure
+      RestartSec=5
+      # llama-server child processes need GPU access and generous ulimits
+      LimitNOFILE=65536
+      LimitMEMLOCK=infinity
+
+      [Install]
+      WantedBy=multi-user.target
+
+  # MOTD — fetched from Pondside-Ops at cloud-init time (see runcmd below).
+  # The authoritative content lives at ember/motd in the repo.
+
+runcmd:
+  # Install uv (standalone installer) to /usr/local/bin
+  - |
+    curl -LsSf https://astral.sh/uv/install.sh | \
+      env UV_INSTALL_DIR=/usr/local/bin INSTALLER_NO_MODIFY_PATH=1 sh
+
+  # uv tool install huggingface-hub[cli] system-wide (for the `hf` command)
+  - |
+    UV_TOOL_DIR=/opt/uv-tools UV_TOOL_BIN_DIR=/usr/local/bin \
+      /usr/local/bin/uv tool install 'huggingface-hub[cli,hf-transfer]'
+
+  # Clone llama.cpp to /opt/llama.cpp. Pin to a known-good commit.
+  # Update intentionally when we re-test; log changes in BUILD_LOG.md.
+  - |
+    if [ ! -d /opt/llama.cpp ]; then
+      git clone https://github.com/ggml-org/llama.cpp /opt/llama.cpp
+      cd /opt/llama.cpp
+      git checkout 0d0764dfd
+    fi
+    chown -R ubuntu:ubuntu /opt/llama.cpp
+
+  # Install llama-swap binary (pinned release v205).
+  - |
+    LLAMA_SWAP_VERSION=v205
+    ARCH=linux_amd64
+    cd /tmp
+    curl -fsSL -o llama-swap.tar.gz \
+      "https://github.com/mostlygeek/llama-swap/releases/download/${LLAMA_SWAP_VERSION}/llama-swap_${LLAMA_SWAP_VERSION#v}_${ARCH}.tar.gz"
+    tar -xzf llama-swap.tar.gz
+    install -m 0755 llama-swap /usr/local/bin/llama-swap
+    rm -f llama-swap.tar.gz llama-swap
+
+  # Make sure /mnt/models exists as a mount point (virtiofs is defined in
+  # domain.xml and mounted at boot via /etc/fstab or directly by libvirt).
+  - install -d -o ubuntu -g ubuntu /mnt/models
+
+  # Fetch the MOTD from Pondside-Ops. Single source of truth lives at
+  # ember/motd in the repo.
+  - |
+    curl -fsSL \
+      https://raw.githubusercontent.com/Pondsiders/Pondside-Ops/main/ember/motd \
+      -o /etc/motd || echo "(MOTD fetch failed — check Pondside-Ops repo)" > /etc/motd
+
+power_state:
+  mode: reboot
+  delay: 0
+  message: "Ember cloud-init complete — rebooting to load nvidia modules"
+  condition: true

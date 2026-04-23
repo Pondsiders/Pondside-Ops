@@ -1,0 +1,12 @@
+# Transient cloud-init ISOs and generated artifacts
+*.iso
+*.img
+seed.*
+
+# Secrets — there shouldn't be any in this repo, but if any leak in here
+# catch them before commit
+.env
+.env.*
+*.pem
+*.key
+authkey*

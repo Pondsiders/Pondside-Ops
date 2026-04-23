@@ -1,0 +1,34 @@
+
+═══════════════════════════════════════════════════════════════════════════
+  ember — Pondside GPU inference node.  First-login setup checklist.
+═══════════════════════════════════════════════════════════════════════════
+
+  1. Join the tailnet (you'll need to approve the auth URL in a browser):
+       sudo tailscale up --hostname=ember --ssh=false
+
+  2. Build llama.cpp with CUDA (~5-10 min on a beefy VM, faster with -j):
+       cd /opt/llama.cpp
+       cmake -B build -DGGML_CUDA=ON -DGGML_CCACHE=OFF
+       cmake --build build --config Release -j$(nproc)
+
+  3. Fetch the llama-swap config from Pondside-Ops:
+       sudo mkdir -p /etc/llama-swap
+       sudo curl -fsSL \
+         https://raw.githubusercontent.com/Pondsiders/Pondside-Ops/main/ember/llama-swap/config.yaml \
+         -o /etc/llama-swap/config.yaml
+
+  4. Enable and start llama-swap:
+       sudo systemctl daemon-reload
+       sudo systemctl enable --now llama-swap
+       sudo systemctl status llama-swap --no-pager
+
+  5. Front it with HTTPS via Tailscale Serve (persists across reboots):
+       sudo tailscale serve --bg --https=443 http://127.0.0.1:8001
+
+  6. Verify from anywhere in the tailnet:
+       curl https://ember.tail8bd569.ts.net/v1/models
+
+  Models live in /mnt/models (virtiofs from Primer, survives VM rebuild).
+  Full deploy notes: https://github.com/Pondsiders/Pondside-Ops/blob/main/ember/BUILD_LOG.md
+
+═══════════════════════════════════════════════════════════════════════════
