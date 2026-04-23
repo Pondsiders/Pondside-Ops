@@ -1,22 +1,15 @@
 # Harbormaster — LiteLLM proxy with Tailscale sidecar.
 #
 # Serves at https://api.tail8bd569.ts.net (Let's Encrypt via Tailscale Serve).
-# Routes local inference through Ember (primary) with Modal serverless
-# fallback, AND transparently passes Claude Max OAuth traffic to Anthropic.
+# Routes local inference: Ember primary, Modal serverless fallback.
 #
-# Identity persistence (Option D pattern):
+# Identity persistence:
 #   - TS_AUTHKEY is used only on FIRST boot, or during disaster recovery.
 #   - TS_AUTH_ONCE=true means the daemon skips re-auth when state is present.
 #   - Persistent tailscale-state volume preserves the machine/node keys.
 #   - After first boot, go to Tailscale admin → Machines → api → "Disable
 #     key expiry". After that, TS_AUTHKEY can expire harmlessly — the
 #     machine identity persists until the volume is lost.
-#
-# The sidecar pattern (Tailscale container with hostname: api, LiteLLM with
-# network_mode: service:tailscale) gives Harbormaster its own tailnet identity
-# independent of the host. Migratable: stop this stack on Primer, bring it up
-# anywhere else on the tailnet with the same .env + volume contents, and
-# api.tail8bd569.ts.net follows.
 
 services:
   tailscale:
@@ -27,8 +20,8 @@ services:
       TS_AUTHKEY: ${TS_AUTHKEY}          # used only on first boot; dormant thereafter
       TS_HOSTNAME: api
       TS_STATE_DIR: /var/lib/tailscale
-      TS_AUTH_ONCE: "true"               # don't re-auth if state is present
-      TS_USERSPACE: "false"              # kernel networking
+      TS_AUTH_ONCE: "true"
+      TS_USERSPACE: "false"
       TS_SERVE_CONFIG: /config/serve-config.json
       TS_EXTRA_ARGS: ${TS_EXTRA_ARGS:-}
     volumes:
@@ -40,27 +33,8 @@ services:
       - NET_RAW
     restart: unless-stopped
 
-  postgres:
-    image: postgres:17
-    container_name: harbormaster-postgres
-    environment:
-      POSTGRES_USER: harbormaster
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: harbormaster
-    volumes:
-      - ./postgres-data:/var/lib/postgresql/data
-    # NOT on the tailscale netns — internal-only. LiteLLM reaches it via
-    # Docker's default bridge DNS (hostname: harbormaster-postgres).
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U harbormaster -d harbormaster"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-
   litellm:
-    build: .
-    image: harbormaster-litellm:latest
+    image: ghcr.io/berriai/litellm:main-stable
     container_name: harbormaster-litellm
     # Share the Tailscale sidecar's network namespace — no direct host-port
     # exposure. External access is via api.tail8bd569.ts.net:443 (HTTPS),
@@ -70,21 +44,10 @@ services:
     depends_on:
       tailscale:
         condition: service_started
-      postgres:
-        condition: service_healthy
     command: ["--config", "/app/config.yaml", "--port", "4000"]
     working_dir: /app
     volumes:
       - ./config.yaml:/app/config.yaml:ro
-      - ./callbacks.py:/app/callbacks.py:ro
     environment:
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
-      # Postgres is on Docker's default bridge, reachable by container name
-      # even though LiteLLM is in the tailscale netns (Docker's internal DNS
-      # still resolves it via the bridge network the postgres container uses).
-      DATABASE_URL: postgresql://harbormaster:${POSTGRES_PASSWORD}@harbormaster-postgres:5432/harbormaster
-      # Neon — observability data for anthropic_usage. Separate from
-      # LiteLLM's own DATABASE_URL so Grafana Cloud can query this without
-      # touching LiteLLM's internal state.
-      NEON_DATABASE_URL: ${NEON_DATABASE_URL}
     restart: unless-stopped
