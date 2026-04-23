@@ -6,13 +6,21 @@ dispatches here instead.
 
 ## What's served
 
-Same models we run on Ember, same quantizations:
+Same models we run on Ember, same quantizations. Identical numerics to
+Ember on failover, because literally the same GGUF files (on a Modal
+Volume rather than Ember's `/mnt/models/`).
 
+Chat models:
 - **`unsloth/qwen3.5-4b`** — Qwen 3.5 4B, Unsloth Dynamic Q4_K_XL GGUF
 - **`gemma-3-12b-it`** — Gemma 3 12B Instruct, Unsloth Dynamic Q4_K_XL GGUF
 
-Identical numerics to Ember on failover, because literally the same GGUF
-files (on a Modal Volume rather than Ember's `/mnt/models/`).
+Embedding models:
+- **`text-embedding-qwen3-embedding-4b`** — Qwen 3 Embedding 4B, Q4_K_M GGUF, pooling=last (Alpha's embedding space)
+- **`text-embedding-nomic-embed-text-v1.5`** — nomic-embed-text v1.5, F16 GGUF, pooling=mean (Rosemary's embedding space)
+
+Without embedding fallback, "chat-only failover" means Alpha-as-goldfish —
+she can talk but she can't remember, because every recall/store/suggest
+fires through the embedding substrate.
 
 ## Shape
 
@@ -40,9 +48,11 @@ uv run modal setup
 # (downloads ~13 GB from HF to Modal, NOT to your laptop)
 uv run modal run populate_volume.py
 
-# Deploy both serving Functions
+# Deploy all four serving Functions (chat + embedding)
 uv run modal deploy serve_qwen.py
 uv run modal deploy serve_gemma.py
+uv run modal deploy serve_qwen_embedding.py
+uv run modal deploy serve_nomic_embedding.py
 
 # Modal prints the public URLs; add them to Harbormaster as fallbacks.
 ```

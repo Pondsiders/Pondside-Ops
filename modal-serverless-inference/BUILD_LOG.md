@@ -69,11 +69,61 @@ version: no LoRA, two models, matches Ember's llama-swap configs exactly.
 - Failover smoke test: stop llama-swap on Ember, send a request, verify
   Harbormaster routes to Modal
 
+## 2026-04-23 — First populate run
+
+`modal run populate_volume.py` on Primer, ~3:08 PM:
+
+```
+[done] Qwen3.5-4B-UD-Q4_K_XL.gguf   2.71 GB in 11.7s  (237 MB/s)
+[done] gemma-3-12b-it-UD-Q4_K_XL.gguf  6.92 GB in 26.9s  (264 MB/s)
+[done] Volume committed.
+```
+
+~40 seconds for 9.63 GB total. Modal's network is exactly as fast as the
+design assumed — residential 40 Mbps uplink never touched. The warning
+about setting HF_TOKEN for higher rate limits was ignorable at our volume.
+
+## 2026-04-23 — Embedding models added to the scaffold
+
+Same-afternoon second pass: chat-only failover means Alpha-as-goldfish —
+she can talk but she can't remember, because recall/store/suggest all
+flow through embeddings. Partial fallback is barely fallback for our
+memory-heavy workload.
+
+Added two more serving Functions:
+
+- `serve_qwen_embedding.py` — Qwen 3 Embedding 4B, Q4_K_M, pooling=last,
+  served as `text-embedding-qwen3-embedding-4b` (Alpha's substrate)
+- `serve_nomic_embedding.py` — nomic-embed-text v1.5, F16, pooling=mean,
+  served as `text-embedding-nomic-embed-text-v1.5` (Rosemary's substrate)
+
+Extended `populate_volume.py` MODELS list with both GGUFs. Idempotent
+re-run picks up only the new files, skips the chat ones already present.
+
+### Quantization parity note
+
+Embedding models use Ember's EXACT quantization (Q4_K_M for Qwen, F16 for
+nomic), not Unsloth's Dynamic quants. Mixing quantizations across hosts
+for the same embedding model = cosine similarities drift in ways you
+can't easily see. The GGUF-picking heuristic (memory #17128) says match
+the embedding space you already have. For chat models numeric-drift
+doesn't matter in the same visceral way; for embeddings it's load-bearing.
+
+### Cold start for embeddings
+
+Concern: embeddings are high-frequency (dozens per turn). A 30s cold
+start per call would be catastrophic. Reality: cold start is one-per-
+failover-event, not per-call. First embed after Ember-down = ~30s; every
+subsequent embed during the active conversation is warm-path fast.
+`scaledown_window=300` covers typical active-chat gaps. Cost and latency
+are both amortized over the warm window, not the individual call.
+
 ## Next
 
-- [ ] First `modal run populate_volume.py` execution — capture wall time
-      and observed download rate
-- [ ] First deploys — record public URLs here for future reference
+- [ ] Second `modal run populate_volume.py` — pulls the two embedding
+      GGUFs, skips the chat ones
+- [ ] Four `modal deploy`s — record all four public URLs here
 - [ ] Harbormaster fallback config snippet (once URLs are known)
-- [ ] Failover test result
+- [ ] Failover test result (stop llama-swap on Ember, verify Harbormaster
+      routes to Modal for both chat and embeddings)
 - [ ] First month's Modal usage report — did the free tier cover it?

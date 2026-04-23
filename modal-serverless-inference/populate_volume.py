@@ -24,7 +24,7 @@ models_volume = modal.Volume.from_name(
 
 # Keep this list in one place. Each serve_*.py references the filename directly.
 MODELS = [
-    # Qwen 3.5 4B — Unsloth Dynamic Q4_K_XL GGUF
+    # Qwen 3.5 4B Instruct — Unsloth Dynamic Q4_K_XL GGUF
     # https://huggingface.co/unsloth/Qwen3.5-4B-GGUF
     (
         "unsloth/Qwen3.5-4B-GGUF",
@@ -35,6 +35,21 @@ MODELS = [
     (
         "unsloth/gemma-3-12b-it-GGUF",
         "gemma-3-12b-it-UD-Q4_K_XL.gguf",
+    ),
+    # Qwen 3 Embedding 4B — Q4_K_M from Qwen team (match Ember exactly;
+    # mixing quants for the SAME embedding model across hosts drifts cosine
+    # similarities in ways you can't easily unsee)
+    # https://huggingface.co/Qwen/Qwen3-Embedding-4B-GGUF
+    (
+        "Qwen/Qwen3-Embedding-4B-GGUF",
+        "Qwen3-Embedding-4B-Q4_K_M.gguf",
+    ),
+    # nomic-embed-text v1.5 — F16 from Nomic team (Rosemary's embedding
+    # space; F16 for quality since the model is tiny anyway — 262 MB)
+    # https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF
+    (
+        "nomic-ai/nomic-embed-text-v1.5-GGUF",
+        "nomic-embed-text-v1.5.f16.gguf",
     ),
 ]
 
