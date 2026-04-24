@@ -2,6 +2,8 @@
 #
 # Serves at https://api.tail8bd569.ts.net (Let's Encrypt via Tailscale Serve).
 # Routes local inference: Ember primary, Modal serverless fallback.
+# Also hosts LiteLLM's admin UI at /ui (requires Postgres for virtual keys,
+# spend tracking, and login state).
 #
 # Identity persistence:
 #   - TS_AUTHKEY is used only on FIRST boot, or during disaster recovery.
@@ -33,6 +35,25 @@ services:
       - NET_RAW
     restart: unless-stopped
 
+  postgres:
+    image: postgres:17
+    container_name: harbormaster-postgres
+    environment:
+      POSTGRES_USER: harbormaster
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: harbormaster
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    # Not on the tailscale netns — internal-only. LiteLLM reaches it by
+    # Docker-internal DNS (`harbormaster-postgres`) via the project's
+    # default bridge network.
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U harbormaster -d harbormaster"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   litellm:
     image: ghcr.io/berriai/litellm:main-stable
     container_name: harbormaster-litellm
@@ -44,10 +65,27 @@ services:
     depends_on:
       tailscale:
         condition: service_started
+      postgres:
+        condition: service_healthy
     command: ["--config", "/app/config.yaml", "--port", "4000"]
     working_dir: /app
     volumes:
       - ./config.yaml:/app/config.yaml:ro
     environment:
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
+      # LITELLM_SALT_KEY encrypts model API keys stored in Postgres. It is
+      # IMMUTABLE after the first model is added — rotating it makes existing
+      # stored credentials undecryptable. Treat as a one-and-done secret.
+      LITELLM_SALT_KEY: ${LITELLM_SALT_KEY}
+      # UI login credentials. Master key still works for API calls; UI login
+      # is a separate credential.
+      UI_USERNAME: ${UI_USERNAME}
+      UI_PASSWORD: ${UI_PASSWORD}
+      # Postgres is on Docker's default bridge, reachable by container name
+      # even though LiteLLM is in the tailscale netns (Docker's internal DNS
+      # still resolves it via the bridge network the postgres container uses).
+      DATABASE_URL: postgresql://harbormaster:${POSTGRES_PASSWORD}@harbormaster-postgres:5432/harbormaster
     restart: unless-stopped
+
+volumes:
+  postgres-data:
