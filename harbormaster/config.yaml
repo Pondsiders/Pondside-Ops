@@ -123,7 +123,7 @@ router_settings:
 # deployment. Unhealthy deployments are removed from routing BEFORE a
 # user request hits them. Healthy deployments are added back automatically.
 general_settings:
-  background_health_checks: true
+  background_health_checks: false
   health_check_interval: 30
   enable_health_check_routing: true
   health_check_ignore_transient_errors: true
@@ -131,3 +131,7 @@ general_settings:
   # Postgres backend — enables the admin UI (/ui), virtual keys, spend
   # tracking, and request logs. DATABASE_URL is set via compose.yml.
   database_url: os.environ/DATABASE_URL
+
+  store_model_in_db: true
+  store_prompts_in_spend_logs: true
+  forward_client_headers_to_llm_api: true
